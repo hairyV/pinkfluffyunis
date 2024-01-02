@@ -57,8 +57,13 @@ public class CarlTeleOp extends LinearOpMode
     private DcMotorEx armMotor = null; //Used to control the arm's up and down movement
     private DcMotorEx windMotor = null; //Used to control the arm's in and out movement
     private Servo clawUD = null; //Used to control the servo's up and down position
+    private Servo clawLeft;
+    private Servo clawRight;
     private Servo hookLeft; //Left hanging hook
     private Servo hookRight; //Right hanging hook
+    boolean clampClose = false;
+    int armStage = 1;
+    ElapsedTime liftTimer = new ElapsedTime();
 
     @Override
     public void runOpMode()
@@ -84,6 +89,8 @@ public class CarlTeleOp extends LinearOpMode
         armMotor = hardwareMap.get(DcMotorEx.class, "arm");
         windMotor = hardwareMap.get(DcMotorEx.class, "wind");
         clawUD = hardwareMap.get(Servo.class, "clawUD");
+        clawLeft = hardwareMap.get(Servo.class,"clawLeft");
+        clawRight = hardwareMap.get(Servo.class,"clawRight");
         hookRight = hardwareMap.get(Servo.class, "hookRight");
         hookLeft = hardwareMap.get(Servo.class, "hookLeft");
         frontCam = hardwareMap.get(HuskyLens.class, "frontCam");
@@ -107,7 +114,8 @@ public class CarlTeleOp extends LinearOpMode
         //Make sure HuskyLens is working
         if(!frontCam.knock()) {
             telemetry.addData("-> ", "Problem communicating with " + frontCam.getDeviceName());
-        } else {
+        }
+        else {
             telemetry.addData("-> ", frontCam.getDeviceName() + " ready");
         }
 
@@ -139,12 +147,87 @@ public class CarlTeleOp extends LinearOpMode
             double armFF = Math.cos(Math.toRadians(armDeployTarget / ticks_in_degree)) * af;
             double armPower = armPID + armFF;
             armMotor.setPower(armPower);
-            if (gamepad1.right_bumper) {
-                armDeployTarget = -3000;
+
+            windController.setPID(wp, wi, wd);
+            int windPos  = windMotor.getCurrentPosition();
+            double windPID = windController.calculate(windPos, windTarget);
+            double windFF = Math.cos(Math.toRadians(windTarget / ticks_in_degree)) * wf;
+            double windPower = windPID * windFF;
+            windMotor.setPower(windPower);
+
+            if(gamepad1.left_bumper && armStage == 1 && liftTimer.seconds() > 0.5){
+                armStage = 0;
+                liftTimer.reset();
             }
-            if (gamepad1.left_bumper) {
+
+            if(gamepad1.left_bumper && armStage == 2 && liftTimer.seconds() > 0.5){
+                armStage = 1;
+                liftTimer.reset();
+            }
+
+            if(gamepad1.left_bumper && armStage == 3 && liftTimer.seconds() > 0.5){
+                armStage = 2;
+                liftTimer.reset();
+            }
+
+            if(gamepad1.right_bumper && armStage == 0 && liftTimer.seconds() > 0.5){
+                armStage = 1;
+                liftTimer.reset();
+            }
+
+            if(gamepad1.right_bumper && armStage == 1 && liftTimer.seconds() > 0.5){
+                armStage = 2;
+                liftTimer.reset();
+            }
+
+            if(gamepad1.right_bumper && armStage == 2 && liftTimer.seconds() > 0.5){
+                armStage = 3;
+                liftTimer.reset();
+            }
+
+
+            if(armStage == 0) {
                 armDeployTarget = -500;
+                windTarget = 2600;
+                clawUD.setPosition(1);
             }
+            if(armStage == 1) {
+                armDeployTarget = -500;
+                windTarget = 0;
+                clawUD.setPosition(1);
+            }
+            if(armStage == 2) {
+                armDeployTarget = -3000;
+                windTarget = 0;
+                clawUD.setPosition(1);
+            }
+            if(armStage == 3) {
+                armDeployTarget = -3000;
+                windTarget = 2600;
+                clawUD.setPosition(1);
+            }
+
+//            if (gamepad1.right_bumper) { //move arm to scoring position
+//                armDeployTarget = -3000;
+//            }
+//            if (gamepad1.left_bumper) { //move arm to intake position
+//                armDeployTarget = -500;
+//            }
+//
+//
+//            if (gamepad1.a & armDeployTarget < -2500) { //arm moves out to score
+//                windTarget = 2600;
+//                clawUD.setPosition(1);
+//            }
+//            if (gamepad1.a & armDeployTarget > -1000) { //arm moves out to intake
+//                windTarget = 2600;
+//                clawUD.setPosition(1);
+//            }
+//            if (gamepad1.b) { //arm comes in
+//                windTarget = 0;
+//                clawUD.setPosition(1);
+//            }
+
 
             if (gamepad1.dpad_up) { //hanging mechanism moves up
                 climbRight.setTargetPosition(2500);
@@ -165,30 +248,29 @@ public class CarlTeleOp extends LinearOpMode
                 climbLeft.setMode(DcMotor.RunMode.RUN_TO_POSITION);
             }
 
-            if (gamepad1.dpad_right) {
+            if (gamepad1.dpad_right & climbRight.getCurrentPosition() > 1000 & climbLeft.getCurrentPosition() > 1000) { //hanging hooks come up
                 hookLeft.setPosition(1);
                 hookRight.setPosition(1);
             }
-
-            /**
-             telemetry.addData("pos: ", armPos);
-             telemetry.addData("target: ", armDeployTarget);
-             telemetry.update();
-             **/
-
-            windController.setPID(wp, wi, wd);
-            int windPos  = windMotor.getCurrentPosition();
-            double windPID = windController.calculate(windPos, windTarget);
-            double windFF = Math.cos(Math.toRadians(windTarget / ticks_in_degree)) * wf;
-            double windPower = windPID * windFF;
-            windMotor.setPower(windPower);
-
-            if (gamepad1.a) {
-                windTarget = 2600;
+            if (gamepad1.dpad_left & climbRight.getCurrentPosition() > 1000 & climbLeft.getCurrentPosition() > 1000) { //hanging hooks come down
+                hookLeft.setPosition(0);
+                hookRight.setPosition(0);
             }
-            if (gamepad1.b) {
-                windTarget = 0;
+
+            if(gamepad1.right_trigger >  0.5 && clampClose == false && liftTimer.seconds() > 0.5){ //claw close
+                clawLeft.setPosition(1);
+                clawRight.setPosition(0);
+                clampClose = true;
+                liftTimer.reset();
             }
+            if(gamepad1.right_trigger > 0.5 && clampClose == true && liftTimer.seconds() > 0.5) { // claw open
+                clawLeft.setPosition(0);
+                clawRight.setPosition(1);
+                clampClose = false;
+                liftTimer.reset();
+            }
+
+
 
 
 
