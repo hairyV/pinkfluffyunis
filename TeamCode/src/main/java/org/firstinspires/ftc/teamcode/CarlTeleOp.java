@@ -7,16 +7,21 @@ import com.qualcomm.hardware.dfrobot.HuskyLens;
 import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.ColorRangeSensor;
+import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DistanceSensor;
 import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.util.Range;
 
+import org.apache.commons.math3.ml.distance.DistanceMeasure;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.BuiltinCameraDirection;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.controls.ExposureControl;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.controls.GainControl;
+import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.vision.VisionPortal;
 import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
 import org.firstinspires.ftc.vision.apriltag.AprilTagProcessor;
@@ -33,8 +38,8 @@ public class CarlTeleOp extends LinearOpMode
     private PIDController armController;
     private PIDController windController;
     //Arm motor PID Constants
-    public static double ap = 0.002, ai = 0, ad = 0.0001;
-    public static double af = -0.15;
+    public static double ap = 0, ai = 0, ad = 0; //0.002, 0, 0.0001
+    public static double af = 0; //-0.15
     public static int armDeployTarget = 0;
     //Wind Motor PID Constants
     public static double wp = 0.07, wi = 0, wd = 0.00001;
@@ -46,7 +51,7 @@ public class CarlTeleOp extends LinearOpMode
 
     //HuskyLens Stuff
     private final int READ_PERIOD = 1;
-    private HuskyLens frontCam;
+//    private HuskyLens frontCam;
 
     private DcMotor leftFrontDrive   = null;  //  Used to control the left front drive wheel
     private DcMotor rightFrontDrive  = null;  //  Used to control the right front drive wheel
@@ -61,8 +66,10 @@ public class CarlTeleOp extends LinearOpMode
     private Servo clawRight;
     private Servo hookLeft; //Left hanging hook
     private Servo hookRight; //Right hanging hook
+    private DistanceSensor dist;
+
     boolean clampClose = false;
-    int armStage = 1;
+    int armStage;
     ElapsedTime liftTimer = new ElapsedTime();
 
     @Override
@@ -93,7 +100,8 @@ public class CarlTeleOp extends LinearOpMode
         clawRight = hardwareMap.get(Servo.class,"clawRight");
         hookRight = hardwareMap.get(Servo.class, "hookRight");
         hookLeft = hardwareMap.get(Servo.class, "hookLeft");
-        frontCam = hardwareMap.get(HuskyLens.class, "frontCam");
+//        -
+        dist = hardwareMap.get(DistanceSensor.class, "dist");
 
         // To drive forward, most robots need the motor on one side to be reversed, because the axles point in opposite directions.
         // When run, this OpMode should start both motors driving forward. So adjust these two lines based on your first test drive.
@@ -102,6 +110,13 @@ public class CarlTeleOp extends LinearOpMode
         leftBackDrive.setDirection(DcMotor.Direction.REVERSE);
         rightFrontDrive.setDirection(DcMotor.Direction.FORWARD);
         rightBackDrive.setDirection(DcMotor.Direction.FORWARD);
+
+        clawRight.setDirection(Servo.Direction.REVERSE);
+
+        leftFrontDrive.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        rightFrontDrive.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        leftBackDrive.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        rightBackDrive.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
 
         armMotor.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
         armMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
@@ -112,12 +127,12 @@ public class CarlTeleOp extends LinearOpMode
         windMotor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
 
         //Make sure HuskyLens is working
-        if(!frontCam.knock()) {
-            telemetry.addData("-> ", "Problem communicating with " + frontCam.getDeviceName());
-        }
-        else {
-            telemetry.addData("-> ", frontCam.getDeviceName() + " ready");
-        }
+//        if(!frontCam.knock()) {
+//            telemetry.addData("-> ", "Problem communicating with " + frontCam.getDeviceName());
+//        }
+//        else {
+//            telemetry.addData("-> ", frontCam.getDeviceName() + " ready");
+//        }
 
 
         //Init PID components
@@ -141,71 +156,71 @@ public class CarlTeleOp extends LinearOpMode
             moveRobot(drive, strafe, turn);
 
             //Arm up-down control
-            armController.setPID(ap, ai, ad);
-            int armPos = armMotor.getCurrentPosition();
-            double armPID = armController.calculate(armPos, armDeployTarget);
-            double armFF = Math.cos(Math.toRadians(armDeployTarget / ticks_in_degree)) * af;
-            double armPower = armPID + armFF;
-            armMotor.setPower(armPower);
-
-            windController.setPID(wp, wi, wd);
-            int windPos  = windMotor.getCurrentPosition();
-            double windPID = windController.calculate(windPos, windTarget);
-            double windFF = Math.cos(Math.toRadians(windTarget / ticks_in_degree)) * wf;
-            double windPower = windPID * windFF;
-            windMotor.setPower(windPower);
-
-            if(gamepad1.left_bumper && armStage == 1 && liftTimer.seconds() > 0.5){
-                armStage = 0;
-                liftTimer.reset();
-            }
-
-            if(gamepad1.left_bumper && armStage == 2 && liftTimer.seconds() > 0.5){
-                armStage = 1;
-                liftTimer.reset();
-            }
-
-            if(gamepad1.left_bumper && armStage == 3 && liftTimer.seconds() > 0.5){
-                armStage = 2;
-                liftTimer.reset();
-            }
-
-            if(gamepad1.right_bumper && armStage == 0 && liftTimer.seconds() > 0.5){
-                armStage = 1;
-                liftTimer.reset();
-            }
-
-            if(gamepad1.right_bumper && armStage == 1 && liftTimer.seconds() > 0.5){
-                armStage = 2;
-                liftTimer.reset();
-            }
-
-            if(gamepad1.right_bumper && armStage == 2 && liftTimer.seconds() > 0.5){
-                armStage = 3;
-                liftTimer.reset();
-            }
-
-
-            if(armStage == 0) {
-                armDeployTarget = -500;
-                windTarget = 2600;
-                clawUD.setPosition(1);
-            }
-            if(armStage == 1) {
-                armDeployTarget = -500;
-                windTarget = 0;
-                clawUD.setPosition(1);
-            }
-            if(armStage == 2) {
-                armDeployTarget = -3000;
-                windTarget = 0;
-                clawUD.setPosition(1);
-            }
-            if(armStage == 3) {
-                armDeployTarget = -3000;
-                windTarget = 2600;
-                clawUD.setPosition(1);
-            }
+//            armController.setPID(ap, ai, ad);
+//            int armPos = armMotor.getCurrentPosition();
+//            double armPID = armController.calculate(armPos, armDeployTarget);
+//            double armFF = Math.cos(Math.toRadians(armDeployTarget / ticks_in_degree)) * af;
+//            double armPower = armPID + armFF;
+//            armMotor.setPower(armPower);
+//
+//            windController.setPID(wp, wi, wd);
+//            int windPos  = windMotor.getCurrentPosition();
+//            double windPID = windController.calculate(windPos, windTarget);
+//            double windFF = Math.cos(Math.toRadians(windTarget / ticks_in_degree)) * wf;
+//            double windPower = windPID * windFF;
+//            windMotor.setPower(windPower);
+//
+//            if(gamepad1.left_bumper && armStage == 1 && liftTimer.seconds() > 0.5){
+//                armStage = 0;
+//                liftTimer.reset();
+//            }
+//
+//            if(gamepad1.left_bumper && armStage == 2 && liftTimer.seconds() > 0.5){
+//                armStage = 1;
+//                liftTimer.reset();
+//            }
+//
+//            if(gamepad1.left_bumper && armStage == 3 && liftTimer.seconds() > 0.5){
+//                armStage = 2;
+//                liftTimer.reset();
+//            }
+//
+//            if(gamepad1.right_bumper && armStage == 0 && liftTimer.seconds() > 0.5){
+//                armStage = 1;
+//                liftTimer.reset();
+//            }
+//
+//            if(gamepad1.right_bumper && armStage == 1 && liftTimer.seconds() > 0.5){
+//                armStage = 2;
+//                liftTimer.reset();
+//            }
+//
+//            if(gamepad1.right_bumper && armStage == 2 && liftTimer.seconds() > 0.5){
+//                armStage = 3;
+//                liftTimer.reset();
+//            }
+//
+//
+//            if(armStage == 0) {
+//                armDeployTarget = 0;
+//                windTarget = -2000;
+//                clawUD.setPosition(0.4);
+//            }
+//            if(armStage == 1) {
+//                armDeployTarget = 0;
+//                windTarget = 0;
+//                clawUD.setPosition(0.98);
+//            }
+//            if(armStage == 2) {
+//                armDeployTarget = -3000;
+//                windTarget = 0;
+//                clawUD.setPosition(0.98);
+//            }
+//            if(armStage == 3) {
+//                armDeployTarget = -3000;
+//                windTarget = -2150;
+//                clawUD.setPosition(0.98);
+//            }
 
 //            if (gamepad1.right_bumper) { //move arm to scoring position
 //                armDeployTarget = -3000;
@@ -257,15 +272,15 @@ public class CarlTeleOp extends LinearOpMode
                 hookRight.setPosition(0);
             }
 
-            if(gamepad1.right_trigger >  0.5 && clampClose == false && liftTimer.seconds() > 0.5){ //claw close
-                clawLeft.setPosition(1);
+            if(gamepad1.right_trigger >  0.5 && clampClose == false && liftTimer.seconds() > 0.5 || dist.getDistance(DistanceUnit.INCH)<2.1 && clampClose == false && liftTimer.seconds() > 0.5){ //claw close
+                clawLeft.setPosition(0);
                 clawRight.setPosition(0);
                 clampClose = true;
                 liftTimer.reset();
             }
             if(gamepad1.right_trigger > 0.5 && clampClose == true && liftTimer.seconds() > 0.5) { // claw open
-                clawLeft.setPosition(0);
-                clawRight.setPosition(1);
+                clawLeft.setPosition(0.155);
+                clawRight.setPosition(0.15);
                 clampClose = false;
                 liftTimer.reset();
             }
@@ -275,10 +290,12 @@ public class CarlTeleOp extends LinearOpMode
 
 
 
-            telemetry.addData("pos: ", windPos);
-            telemetry.addData("target: ", windTarget);
+            telemetry.addData("wind: ", windMotor.getCurrentPosition());
+            telemetry.addData("arm: ", armMotor.getCurrentPosition());
             telemetry.addData("climb right: ", climbRight.getCurrentPosition());
             telemetry.addData("climb right: ", climbLeft.getCurrentPosition());
+            telemetry.addData("clawUD: ", clawUD.getPosition());
+            telemetry.addData("red: ", dist.getDistance(DistanceUnit.INCH));
             telemetry.update();
 
         }
